@@ -5,11 +5,11 @@
  * for a simple target method, we just call the "nonce" method of the account itself.
  */
 
-import { BigNumber, Signer, Wallet } from 'ethers'
+import { BigNumber, BigNumberish, Signer, Wallet, ethers } from 'ethers'
 import { JsonRpcProvider } from '@ethersproject/providers'
-import { formatEther, keccak256, parseEther } from 'ethers/lib/utils'
+import { formatEther, parseEther } from 'ethers/lib/utils'
 import { Command } from 'commander'
-import { DeterministicDeployer, erc4337RuntimeVersion, SimpleAccountFactory__factory } from '@account-abstraction/utils'
+import { AddressZero, DeterministicDeployer, erc4337RuntimeVersion, SimpleAccountFactory__factory } from '@account-abstraction/utils'
 import fs from 'fs'
 import { HttpRpcClient, SimpleAccountAPI } from '@account-abstraction/sdk'
 import { runBundler } from '../runBundler'
@@ -79,11 +79,13 @@ class Runner {
     return e
   }
 
-  async runUserOp (target: string, data: string): Promise<void> {
+  async runUserOp (target: string, data: string, value: BigNumberish): Promise<void> {
     const userOp = await this.accountApi.createSignedUserOp({
       target,
-      data
+      data,
+      value
     })
+    console.log('userOp', userOp)
     try {
       const userOpHash = await this.bundlerProvider.sendUserOpToBundler(userOp)
       const txid = await this.accountApi.getUserOpReceipt(userOpHash)
@@ -114,7 +116,6 @@ async function main (): Promise<void> {
   if (opts.selfBundler != null) {
     // todo: if node is geth, we need to fund our bundler's account:
     const signer = provider.getSigner()
-
     const signerBalance = await provider.getBalance(signer.getAddress())
     const account = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'
     const bal = await provider.getBalance(account)
@@ -156,6 +157,7 @@ async function main (): Promise<void> {
 
   const index = opts.nonce ?? Date.now()
   console.log('using account index=', index)
+  console.log(accountOwner.address)
   const client = await new Runner(provider, opts.bundlerUrl, accountOwner, opts.entryPoint, index).init(deployFactory ? signer : undefined)
 
   const addr = await client.getAddress()
@@ -168,29 +170,45 @@ async function main (): Promise<void> {
     return await provider.getBalance(addr)
   }
 
-  const bal = await getBalance(addr)
+  let bal = await getBalance(addr)
   console.log('account address', addr, 'deployed=', await isDeployed(addr), 'bal=', formatEther(bal))
-  const gasPrice = await provider.getGasPrice()
   // TODO: actual required val
-  const requiredBalance = gasPrice.mul(4e6)
-  if (bal.lt(requiredBalance.div(2))) {
-    console.log('funding account to', requiredBalance.toString())
+  console.log(`signer : ${await signer.getAddress()}`)
+  if (bal.lt(parseEther('2'))) {
+    console.log('funding account to', parseEther('2'))
     await signer.sendTransaction({
       to: addr,
-      value: requiredBalance.sub(bal)
+      value: parseEther('2').sub(bal)
     }).then(async tx => await tx.wait())
   } else {
     console.log('not funding account. balance is enough')
   }
+  bal = await getBalance(addr)
+  console.log('account address', addr, 'deployed=', await isDeployed(addr), 'bal=', formatEther(bal))
 
-  const dest = addr
-  const data = keccak256(Buffer.from('entryPoint()')).slice(0, 10)
+  // Check entrypoint deposit and fund if needed
+  const entryPointContract = new ethers.Contract(opts.entryPoint, [
+    'function balanceOf(address account) view returns (uint256)',
+    'function depositTo(address account) payable'
+  ], signer)
+
+  const currentDeposit: BigNumber = await entryPointContract.balanceOf(addr)
+  console.log('current entrypoint deposit:', formatEther(currentDeposit))
+
+  if (currentDeposit.lt(parseEther('1'))) {
+    console.log('funding entrypoint deposit to 1 ETH')
+    const tx = await entryPointContract.depositTo(addr, { value: parseEther('1').sub(currentDeposit) })
+    await tx.wait()
+    console.log('entrypoint deposit funded')
+  } else {
+    console.log('entrypoint deposit is sufficient')
+  }
+
+  const dest = AddressZero
+  const data = '0x'
   console.log('data=', data)
-  await client.runUserOp(dest, data)
+  await client.runUserOp(dest, data, 1n)
   console.log('after run1')
-  // client.accountApi.overheads!.perUserOp = 30000
-  await client.runUserOp(dest, data)
-  console.log('after run2')
   await bundler?.stop()
 }
 
