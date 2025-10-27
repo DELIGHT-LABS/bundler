@@ -1,5 +1,5 @@
 {
-  "chainId": 1337,
+  "chainId": 262144,
   "gasFactor": "1",
   "port": "3000",
   "privateApiPort": "3001",
@@ -12,5 +12,6 @@
   "minStake": "1",
   "minUnstakeDelay": 0,
   "autoBundleInterval": 3,
-  "autoBundleMempoolSize": 10
+  "autoBundleMempoolSize": 10,
+  "unsafe": true
 }
